@@ -1,8 +1,14 @@
-from config import INDEX_NAME_N_GRAM, INDEX_NAME_DEFAULT
-from utils import get_es_client
+import torch
+
 from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
+from fastapi.middleware.cors import CORSMiddleware
+
+from sentence_transformers import SentenceTransformer
+
+from utils import get_es_client
+from config import INDEX_NAME_DEFAULT, INDEX_NAME_N_GRAM, INDEX_NAME_EMBEDDING, INDEX_NAME_RAW
+
 
 app = FastAPI()
 app.add_middleware(
@@ -13,64 +19,18 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-@app.get("/api/v1/search/")
-async def search(search_query: str, skip: int = 0, limit: int = 10, year: str | None = None) -> dict:
-    es = get_es_client(max_retries=1, sleep_time=0)
-    query = {
-            "bool": {
-                "must": [
-                    {
-                        "multi_match": {
-                            "query": search_query,
-                            "fields": ["title", 'explanation'],
-                        }
-                    }
-                ]
-            }
-        }
-    
-    if year:
-        query["bool"]["filter"] = [
-            {
-                "range": {
-                    "date": {
-                        "gte": f"{year}-01-01",
-                        "lte": f"{year}-12-31",
-                        "format": "yyyy-MM-dd"
-                    }
-                }
-            }
-        ]
-    response = es.search(
-        index=INDEX_NAME_N_GRAM,
-        body={
-            "query": query,
-            "from": skip,
-            "size": limit
-        },
-        filter_path=[
-            'hits.hits._source', 
-            'hits.hits._score',
-            'hits.total',
-            ]
-    )
-    
-    total_hits = get_total_hits(response)
-    max_pages = calculate_max_pages(total_hits, limit)
-    
-    return {
-        "hits": response["hits"].get("hits", []),
-        "max_pages": max_pages,
-    }
+device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+model = SentenceTransformer('all-MiniLM-L6-v2').to(device)
 
-def get_total_hits(response: dict) -> int:
-    return response['hits']['total']['value']
 
-def calculate_max_pages(total_hits: int, limit: int) -> int:
-    return (total_hits + limit - 1) // limit
-
-@app.get("/api/v1/get_docs_per_year_count/")
-async def get_docs_per_year_count(search_query: str) -> dict:
+@app.get("/api/v1/regular_search/")
+async def regular_search(
+    search_query: str, 
+    skip: int = 0, 
+    limit: int = 10,
+    year: str | None = None,
+    tokenizer: str = "Standard"
+) -> dict:
     try:
         es = get_es_client(max_retries=1, sleep_time=0)
         query = {
@@ -79,26 +39,164 @@ async def get_docs_per_year_count(search_query: str) -> dict:
                     {
                         "multi_match": {
                             "query": search_query,
-                            "fields": ["title", 'explanation'],
+                            "fields": ["title", "explanation"],
                         }
                     }
                 ]
             }
         }
 
-        response = es.search(
-            index=INDEX_NAME_N_GRAM,
-            body={
-                "query": query,
-                "aggs":{
-                    "docs_per_year": {
-                        "date_histogram": {
-                            "field": "date",
-                            "calendar_interval": "year",
-                            "format": "yyyy"
+        if year:
+            query["bool"]["filter"] = [
+                {
+                    "range": {
+                        "date": {
+                            "gte": f"{year}-01-01",
+                            "lte": f"{year}-12-31",
+                            "format": "yyyy-MM-dd"
                         }
                     }
                 }
+            ]
+            
+        index_name = INDEX_NAME_DEFAULT if tokenizer == "Standard" else INDEX_NAME_N_GRAM
+        response = es.search(
+            index=index_name,
+            body={
+                "query": query,
+                "from": skip,
+                "size": limit,
+            },
+            filter_path=[
+                "hits.hits._source",
+                "hits.hits._score",
+                "hits.total",
+            ]
+        )
+
+        total_hits = get_total_hits(response)
+        max_pages = calculate_max_pages(total_hits, limit)
+
+        return {
+            "hits": response["hits"].get("hits", []),
+            "max_pages": max_pages,
+        }
+    except Exception as e:
+        return handle_error(e)
+    
+
+@app.get("/api/v1/semantic_search/")
+async def semantic_search(
+    search_query: str,
+    skip: int = 0,
+    limit: int = 10,
+    year: str | None = None
+) -> dict:
+    try:
+        es = get_es_client(max_retries=1, sleep_time=0)
+        
+        # Tenta gerar o embedding
+        try:
+            embedded_query = model.encode(search_query)
+            embedded_query = embedded_query.tolist()  # CONVERSÃO IMPORTANTE!
+        except Exception as e:
+            return handle_error(Exception("Erro ao gerar o embedding da busca: " + str(e)))
+
+        # Monta a query de KNN
+        query = {
+            "bool": {
+                "must": [
+                    {
+                        "knn": {
+                            "field": "embedding",
+                            "query_vector": embedded_query,
+                            "k": 10000
+                        }
+                    }
+                ]
+            }
+        }
+
+        # Filtro por ano (opcional)
+        if year:
+            query["bool"]["filter"] = [
+                {
+                    "range": {
+                        "date": {
+                            "gte": f"{year}-01-01",
+                            "lte": f"{year}-12-31",
+                            "format": "yyyy-MM-dd"
+                        }
+                    }
+                }
+            ]
+        
+        # Faz a busca no Elasticsearch
+        response = es.search(
+            index=INDEX_NAME_EMBEDDING,
+            body={
+                "query": query,
+                "from": skip,
+                "size": limit,
+            },
+            filter_path=[
+                "hits.hits._source",
+                "hits.hits._score",
+                "hits.total",
+            ]
+        )
+
+        total_hits = get_total_hits(response)
+        max_pages = calculate_max_pages(total_hits, limit)
+
+        return {
+            "hits": response["hits"].get("hits", []),
+            "max_pages": max_pages,
+        }
+    except Exception as e:
+        return handle_error(e)
+
+    
+
+def get_total_hits(response: dict) -> int:
+    return response["hits"]["total"]["value"]
+
+
+def calculate_max_pages(total_hits: int, limit: int) -> int:
+    return (total_hits + limit - 1) // limit
+    
+    
+@app.get("/api/v1/get_docs_per_year_count/")
+async def get_docs_per_year_count(search_query: str, tokenizer: str = "Standard") -> dict:
+    try:
+        es = get_es_client(max_retries=1, sleep_time=0)
+        query = {
+            "bool": {
+                "must": [
+                    {
+                        "multi_match": {
+                            "query": search_query,
+                            "fields": ["title", "explanation"],
+                        }
+                    }
+                ]
+            }
+        }
+            
+        index_name = INDEX_NAME_DEFAULT if tokenizer == "Standard" else INDEX_NAME_N_GRAM
+        response = es.search(
+            index=index_name,
+            body={
+                "query": query,
+                "aggs": {
+                    "docs_per_year": {
+                        "date_histogram": {
+                            "field": "date",
+                            "calendar_interval": "year",  # Group by year
+                            "format": "yyyy"             # Format the year in the response
+                        }
+                    }
+                },
             },
             filter_path=[
                 "aggregations.docs_per_year"
@@ -106,10 +204,16 @@ async def get_docs_per_year_count(search_query: str) -> dict:
         )
         return {"docs_per_year": extract_docs_per_year(response)}
     except Exception as e:
-        return HTMLResponse(content=str(e), status_code=500)
+        return handle_error(e)
+
 
 def extract_docs_per_year(response: dict) -> dict:
     aggregations = response.get("aggregations", {})
     docs_per_year = aggregations.get("docs_per_year", {})
     buckets = docs_per_year.get("buckets", [])
-    return {buckets["key_as_string"]: bucket["doc_count"] for bucket in buckets}
+    return {bucket["key_as_string"]: bucket["doc_count"] for bucket in buckets}
+
+
+def handle_error(e: Exception) -> HTMLResponse:
+    error_message = f"An error occurred: {str(e)}"
+    return HTMLResponse(content=error_message, status_code=500)

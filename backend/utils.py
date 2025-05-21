@@ -1,15 +1,15 @@
 import time
+
 from pprint import pprint
 from elasticsearch import Elasticsearch
 
-def get_es_client(max_retries: int = 1, sleep_time: int = 0) -> Elasticsearch:
+
+def get_es_client(max_retries: int = 1, sleep_time: int = 5) -> Elasticsearch:
     i = 0
     while i < max_retries:
         try:
-            es = Elasticsearch("http://localhost:9200")
-            client_info = es.info()
-            print("Connected to Elasticsearch!")
-            pprint(f'Cluster Info: \n{client_info}')
+            es = Elasticsearch('http://localhost:9200')
+            pprint('Connected to Elasticsearch!')
             return es
         except Exception:
             pprint('Could not connect to Elasticsearch, retrying...')
