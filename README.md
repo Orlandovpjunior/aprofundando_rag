@@ -8,6 +8,7 @@ Rode o container:
 -e "xpack.license.self_generated.type=trial" \
 -v "elasticsearch-data:/usr/share/elasticsearch/data" \
 [docker.elastic.co/elasticsearch/elasticsearch:8.15.0](http://docker.elastic.co/elasticsearch/elasticsearch:8.15.0)`
+
 Depois:
 docker start elasticsearch
 
