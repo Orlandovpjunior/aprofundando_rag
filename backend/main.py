@@ -94,15 +94,8 @@ async def semantic_search(
 ) -> dict:
     try:
         es = get_es_client(max_retries=1, sleep_time=0)
+        embedded_query = model.encode(search_query)
         
-        # Tenta gerar o embedding
-        try:
-            embedded_query = model.encode(search_query)
-            embedded_query = embedded_query.tolist()  # CONVERSÃO IMPORTANTE!
-        except Exception as e:
-            return handle_error(Exception("Erro ao gerar o embedding da busca: " + str(e)))
-
-        # Monta a query de KNN
         query = {
             "bool": {
                 "must": [
@@ -110,14 +103,13 @@ async def semantic_search(
                         "knn": {
                             "field": "embedding",
                             "query_vector": embedded_query,
-                            "k": 10000
+                            "k": 1e4
                         }
                     }
                 ]
             }
         }
 
-        # Filtro por ano (opcional)
         if year:
             query["bool"]["filter"] = [
                 {
@@ -131,7 +123,6 @@ async def semantic_search(
                 }
             ]
         
-        # Faz a busca no Elasticsearch
         response = es.search(
             index=INDEX_NAME_EMBEDDING,
             body={
@@ -155,7 +146,6 @@ async def semantic_search(
         }
     except Exception as e:
         return handle_error(e)
-
     
 
 def get_total_hits(response: dict) -> int:
@@ -192,8 +182,8 @@ async def get_docs_per_year_count(search_query: str, tokenizer: str = "Standard"
                     "docs_per_year": {
                         "date_histogram": {
                             "field": "date",
-                            "calendar_interval": "year",  # Group by year
-                            "format": "yyyy"             # Format the year in the response
+                            "calendar_interval": "year",
+                            "format": "yyyy"            
                         }
                     }
                 },
