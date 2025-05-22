@@ -53,9 +53,3 @@ Dentro da pasta `frontend`, execute:
 npm install
 npm run serve
 ```
-
----
-
-Pronto! O projeto estará rodando com backend + frontend + Elasticsearch integrados. ✅
-
-```
