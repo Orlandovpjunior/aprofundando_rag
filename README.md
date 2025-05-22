@@ -10,6 +10,10 @@ Rode o container:
 -v "elasticsearch-data:/usr/share/elasticsearch/data" \
 [docker.elastic.co/elasticsearch/elasticsearch:8.15.0](http://docker.elastic.co/elasticsearch/elasticsearch:8.15.0)`
 
+Instale as dependências:
+
+pip install -r requirements.txt
+
 Depois:
 
 docker start elasticsearch
